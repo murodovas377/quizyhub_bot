@@ -18,6 +18,7 @@ from aiogram.fsm.state import StatesGroup, State
 from aiogram.fsm.storage.base import StorageKey
 from docx import Document
 from config import BOT_TOKEN
+from datetime import datetime
 
 
 FILE = "premium.json"
@@ -26,6 +27,10 @@ USERS_FILE = "users.json"
 if not os.path.exists(FILE):
     with open(FILE, "w", encoding="utf-8") as f:
         json.dump({}, f, ensure_ascii=False, indent=4)
+
+ADMINS_FILE = "admins.json"
+GLOBAL_TESTS_FILE = "global_tests.json"
+RESULTS_FILE = "test_results.json"
 
 LANG_FILE = "lang.json"
 
@@ -97,6 +102,42 @@ def delete_user_test_id(user_id, test_id):
             data[user_id_str].remove(test_id)
         with open("user_data.json", "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=4)
+
+def load_json(filename, default=None):
+    if not os.path.exists(filename):
+        data = default or {}
+        save_json(filename, data)
+        return data
+    with open(filename, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+def save_json(filename, data):
+    with open(filename, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=4)
+
+# ====================== АДМИНЫ ======================
+def load_admins():
+    return load_json(ADMINS_FILE, [SUPER_ADMIN_ID])
+
+def save_admins(data):
+    save_json(ADMINS_FILE, data)
+
+def is_admin(user_id):
+    return user_id == SUPER_ADMIN_ID or user_id in load_admins()
+
+def add_admin(user_id):
+    admins = load_admins()
+    if user_id not in admins:
+        admins.append(user_id)
+        save_admins(admins)
+
+def remove_admin(user_id):
+    if user_id == SUPER_ADMIN_ID:
+        return
+    admins = load_admins()
+    if user_id in admins:
+        admins.remove(user_id)
+        save_admins(admins)
 
 # ====================== ПОЛЬЗОВАТЕЛИ ======================
 def load_users():
@@ -191,6 +232,30 @@ def get_premium_time_left(user_id):
     hours = int((left % 86400) // 3600)
     return f"{days} дн. {hours} ч."
 
+# ====================== РЕЗУЛЬТАТЫ ТЕСТОВ ======================
+def save_test_result(test_id, group_key, user_id, score, total, time_spent):
+    results = load_json(RESULTS_FILE)
+    if test_id not in results:
+        results[test_id] = {}
+    if group_key not in results[test_id]:
+        results[test_id][group_key] = []
+    result = {
+        "user_id": user_id,
+        "username": load_users().get(str(user_id), {}).get("username", f"ID{user_id}"),
+        "score": score,
+        "total": total,
+        "time_spent": round(time_spent, 1),
+        "date": datetime.now().isoformat()
+    }
+    results[test_id][group_key].append(result)
+    save_json(RESULTS_FILE, results)
+
+def get_leaderboard(test_id, group_key, limit=10):
+    results = load_json(RESULTS_FILE)
+    data = results.get(test_id, {}).get(group_key, [])
+    sorted_data = sorted(data, key=lambda x: (-x["score"], x["time_spent"]))
+    return sorted_data[:limit]
+
 # ====================== ВСПОМОГАТЕЛЬНЫЕ ======================
 def read_txt(path):
     with open(path, "r", encoding="utf-8") as f:
@@ -271,16 +336,21 @@ class CreateTest(StatesGroup):
 class AdminSearch(StatesGroup):
     query = State()
 
+class EditTest(StatesGroup):
+    name = State()
+    time = State()
+    order = State()
+
 def get_menu(user_id):
-    return ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text=t(user_id, "new_test"))],
-            [KeyboardButton(text=t(user_id, "premium"))],
-            [KeyboardButton(text=t(user_id, "my_tests"))],
-            [KeyboardButton(text=t(user_id, "admin"))]
-        ],
-        resize_keyboard=True
-    )
+    keyboard = [
+        [KeyboardButton(text=t(user_id, "new_test"))],
+        [KeyboardButton(text=t(user_id, "ready_tests"))],   # новая кнопка
+        [KeyboardButton(text=t(user_id, "my_tests"))],
+        [KeyboardButton(text=t(user_id, "premium"))]
+    ]
+    if is_admin(user_id):
+        keyboard.append([KeyboardButton(text=t(user_id, "admin"))])
+    return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
 
 # ====================== ФИЛЬТР КНОПОК МЕНЮ ======================
 class IsMenuButton(Filter):
@@ -570,22 +640,47 @@ async def show_my_tests(message: Message, user_id: int):
 
     await message.answer(t(user_id, "your_tests"), reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
 
-async def show_test_groups(message: Message, test: dict, test_id: str, user_id: int):
+
+async def show_test_groups(message: Message, test: dict, test_id: str, user_id: int, page: int = 0):
+    """Обновлённая версия с пагинацией (максимум 5 групп на странице + стрелки)"""
     questions = test.get("questions", [])
-    split = test.get("split", len(questions) or 10)
-    buttons = [
-        [InlineKeyboardButton(
-            text=f"{start + 1}-{min(start + split, len(questions))}",
-            callback_data=f"group_{test_id}_{start}_{min(start + split, len(questions))}"
-        )]
-        for start in range(0, len(questions), split)
-    ]
+    split = test.get("split", 30)
+    groups = list(range(0, len(questions), split))
+
+    # Пагинация — максимум 5 кнопок
+    items_per_page = 5
+    start_idx = page * items_per_page
+    current_groups = groups[start_idx: start_idx + items_per_page]
+
+    buttons = []
+    for s in current_groups:
+        e = min(s + split, len(questions))
+        buttons.append([InlineKeyboardButton(
+            text=f"{s + 1}-{e}",
+            callback_data=f"group_{test_id}_{s}_{e}"
+        )])
+
+    # Стрелки навигации
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton("⬅️", callback_data=f"groups_page_{test_id}_{page - 1}"))
+    if start_idx + items_per_page < len(groups):
+        nav.append(InlineKeyboardButton("➡️", callback_data=f"groups_page_{test_id}_{page + 1}"))
+    if nav:
+        buttons.append(nav)
+
+    # Нижняя панель
+    buttons.append([
+        InlineKeyboardButton(text=t(user_id, "btn_send_group"), callback_data=f"send_group_{test_id}"),
+        InlineKeyboardButton(text=t(user_id, "edit_test"), callback_data=f"edit_test_{test_id}")
+    ])
     buttons.append([
         InlineKeyboardButton(text=t(user_id, "btn_delete_test"), callback_data=f"delete_test_{test_id}"),
         InlineKeyboardButton(text=t(user_id, "btn_back"), callback_data="back_to_my_tests")
     ])
+
     await message.edit_text(
-        t(user_id, "choose_group").format(name=test["name"]),
+        t(user_id, "choose_group").format(name=test.get("name", "Тест")),
         reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons)
     )
 
@@ -968,6 +1063,112 @@ async def begin_test(callback: CallbackQuery, state: FSMContext):
     await start_countdown(callback.message.chat.id, callback.from_user.id)
     await send_question(state)
 
+# ====================== НОВЫЕ CALLBACK ХЕНДЛЕРЫ (2.8) ======================
+
+@dp.callback_query(F.data.startswith("groups_page_"))
+async def groups_page_handler(callback: CallbackQuery):
+    parts = callback.data.split("_")
+    test_id = parts[2]
+    page = int(parts[3])
+    test = load_global_test(test_id)
+    if not test:
+        return await callback.answer(t(callback.from_user.id, "test_not_found"), show_alert=True)
+    await show_test_groups(callback.message, test, test_id, callback.from_user.id, page)
+    await callback.answer()
+
+@dp.callback_query(F.data.startswith("edit_test_"))
+async def edit_test_menu(callback: CallbackQuery):
+    test_id = callback.data.split("_")[2]
+    test = load_global_test(test_id)
+    if not test:
+        return await callback.answer(t(callback.from_user.id, "test_not_found"), show_alert=True)
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=t(callback.from_user.id, "change_name"), callback_data=f"edit_name_{test_id}")],
+        [InlineKeyboardButton(text=t(callback.from_user.id, "change_timer"), callback_data=f"edit_time_{test_id}")],
+        [InlineKeyboardButton(text=t(callback.from_user.id, "change_order"), callback_data=f"edit_order_{test_id}")],
+        [InlineKeyboardButton(text=t(callback.from_user.id, "btn_back"), callback_data=f"back_to_groups_{test_id}")]
+    ])
+    await callback.message.edit_text(f"✏️ Редактирование теста:\n{test.get('name', 'Без названия')}", reply_markup=kb)
+
+@dp.callback_query(F.data.startswith("edit_name_"))
+async def edit_name_handler(callback: CallbackQuery, state: FSMContext):
+    test_id = callback.data.split("_")[2]
+    await state.update_data(test_id=test_id)
+    await callback.message.answer(t(callback.from_user.id, "enter_new_name"))
+    await state.set_state(EditTest.name)
+    await callback.answer()
+
+
+@dp.message(EditTest.name)
+async def process_new_name(message: Message, state: FSMContext):
+    data = await state.get_data()
+    test_id = data.get("test_id")
+
+    if os.path.exists("global_tests.json"):
+        with open("global_tests.json", "r", encoding="utf-8") as f:
+            all_tests = json.load(f)
+
+        if test_id in all_tests:
+            all_tests[test_id]["name"] = message.text
+            with open("global_tests.json", "w", encoding="utf-8") as f:
+                json.dump(all_tests, f, ensure_ascii=False, indent=4)
+            await message.answer("✅ Название теста успешно изменено!")
+        else:
+            await message.answer(t(message.from_user.id, "test_not_found"))
+    else:
+        await message.answer(t(message.from_user.id, "test_not_found"))
+
+    await state.clear()
+
+@dp.callback_query(F.data.startswith("edit_time_"))
+async def edit_time_handler(callback: CallbackQuery, state: FSMContext):
+    test_id = callback.data.split("_")[2]
+    await state.update_data(test_id=test_id)
+    await callback.message.answer(t(callback.from_user.id, "enter_time"))
+    await state.set_state(EditTest.time)
+    await callback.answer()
+
+
+@dp.message(EditTest.time)
+async def process_new_time(message: Message, state: FSMContext):
+    if not message.text.isdigit() or not (10 <= int(message.text) <= 300):
+        return await message.answer(t(message.from_user.id, "enter_time"))
+
+    data = await state.get_data()
+    test_id = data.get("test_id")
+
+    if os.path.exists("global_tests.json"):
+        with open("global_tests.json", "r", encoding="utf-8") as f:
+            all_tests = json.load(f)
+
+        if test_id in all_tests:
+            all_tests[test_id]["time"] = int(message.text)
+            with open("global_tests.json", "w", encoding="utf-8") as f:
+                json.dump(all_tests, f, ensure_ascii=False, indent=4)
+            await message.answer("✅ Таймер успешно изменён!")
+        else:
+            await message.answer(t(message.from_user.id, "test_not_found"))
+    else:
+        await message.answer(t(message.from_user.id, "test_not_found"))
+
+    await state.clear()
+
+@dp.callback_query(F.data.startswith("edit_order_"))
+async def edit_order_handler(callback: CallbackQuery):
+    test_id = callback.data.split("_")[2]
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=t(callback.from_user.id, "shuffle_all"), callback_data=f"order_shuffle_{test_id}")],
+        [InlineKeyboardButton(text=t(callback.from_user.id, "by_order"), callback_data=f"order_normal_{test_id}")],
+        [InlineKeyboardButton(text=t(callback.from_user.id, "only_questions"), callback_data=f"order_questions_{test_id}")],
+        [InlineKeyboardButton(text=t(callback.from_user.id, "only_answers"), callback_data=f"order_answers_{test_id}")],
+        [InlineKeyboardButton(text=t(callback.from_user.id, "btn_back"), callback_data=f"edit_test_{test_id}")]
+    ])
+    await callback.message.edit_text("Выберите новый порядок вопросов:", reply_markup=kb)
+
+@dp.callback_query(F.data.startswith("send_group_"))
+async def send_to_group(callback: CallbackQuery):
+    await callback.answer("📤 Функция отправки группы в чат скоро будет добавлена!", show_alert=True)
 # ====================== ОБРАБОТЧИК ОТВЕТОВ ======================
 
 @dp.poll_answer()
