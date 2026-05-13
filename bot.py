@@ -456,15 +456,21 @@ class EditTest(StatesGroup):
 class SendToGroup(StatesGroup):
     group_id = State()
 
+class BroadcastMessage(StatesGroup):
+    message = State()
+    confirm = State()
+
 def get_menu(user_id):
     keyboard = [
         [KeyboardButton(text=t(user_id, "new_test"))],
-        [KeyboardButton(text=t(user_id, "ready_tests"))],   # новая кнопка
+        [KeyboardButton(text=t(user_id, "ready_tests"))],
         [KeyboardButton(text=t(user_id, "my_tests"))],
         [KeyboardButton(text=t(user_id, "premium"))]
     ]
     if is_admin(user_id):
         keyboard.append([KeyboardButton(text=t(user_id, "admin"))])
+    if user_id == SUPER_ADMIN_ID:
+        keyboard.append([KeyboardButton(text="📢 Рассылка")])
     return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
 
 # ====================== ФИЛЬТР КНОПОК МЕНЮ ======================
@@ -476,6 +482,8 @@ class IsMenuButton(Filter):
                      "back", "users", "search", "premium_active",
                      "give_all_premium", "remove_premium_all",
                      "give_all_premium_plus", "remove_premium_plus_all"]
+        if message.text == "📢 Рассылка":
+            return True
         return any(
             message.text == LANG[lang].get(key)
             for lang in LANG
@@ -652,6 +660,19 @@ async def any_state_menu_handler(message: Message, state: FSMContext):
 async def main_text_handler(message: Message, state: FSMContext):
     text = message.text
     user_id = message.from_user.id
+
+    if text == "📢 Рассылка" and user_id == SUPER_ADMIN_ID:
+        await message.answer(
+            "📢 Введите сообщение для рассылки всем пользователям.\n\n"
+            "Поддерживается текст, фото, видео, документ.\n"
+            "Для отмены напиши /stop",
+            reply_markup=ReplyKeyboardMarkup(
+                keyboard=[[KeyboardButton(text="❌ Отмена")]],
+                resize_keyboard=True
+            )
+        )
+        await state.set_state(BroadcastMessage.message)
+        return
 
     if text == t(user_id, "admin"):
         if not is_admin(user_id):
@@ -1222,15 +1243,21 @@ async def send_question(state: FSMContext):
     )
 
     time_limit = test.get("time", 20)
+
+    # Отменяем предыдущий таймаут если вдруг ещё жив
+    old_task = data.get("timeout_task")
+    if old_task and not old_task.done():
+        old_task.cancel()
+
     task = asyncio.create_task(check_inactive_timeout(state, poll.poll.id, time_limit))
-    await state.update_data(timeout_task=task)
 
     poll_owners[poll.poll.id] = data.get("user_id")
 
     await state.update_data(
         current_poll_id=poll.poll.id,
         correct=new_correct,
-        answered=None
+        answered=None,
+        timeout_task=task
     )
 
 async def check_inactive_timeout(state: FSMContext, poll_id: str, time_limit: int):
@@ -1562,14 +1589,19 @@ async def retry_test(callback: CallbackQuery, state: FSMContext):
     if not test:
         return await callback.answer(t(callback.from_user.id, "test_not_found"), show_alert=True)
 
+    all_questions = test.get("questions", [])
+    group_questions = all_questions[start:end]
+    local_test = {**test, "questions": group_questions}
+    local_end = len(group_questions)
+
     await state.update_data(
         chat_id=callback.message.chat.id,
         user_id=callback.from_user.id,
         test_id=test_id,
-        test=test,
-        q_index=start,
-        start=start,
-        end=end,
+        test=local_test,
+        q_index=0,        # всегда с нуля!
+        start=0,
+        end=local_end,
         score=0,
         wrong=0,
         start_time=time.time(),
@@ -1847,8 +1879,10 @@ async def begin_test(callback: CallbackQuery, state: FSMContext):
     end = int(parts[4])
     test = load_global_test(test_id)
 
+    if not test:
+        return await callback.answer(t(callback.from_user.id, "test_not_found"), show_alert=True)
+
     all_questions = test.get("questions", [])
-    # ВАЖНО! Берём только вопросы в диапазоне start-end
     group_questions = all_questions[start:end]
     order = test.get("order", "normal")
 
@@ -1859,30 +1893,29 @@ async def begin_test(callback: CallbackQuery, state: FSMContext):
         group_questions = group_questions.copy()
         random.shuffle(group_questions)
     elif order == "answers":
-        group_questions = [
-            {**q, "answers": (lambda a, c: (
-                (lambda p: (
-                    [ans for _, ans in p],
-                    next(i for i, (old, _) in enumerate(p) if old == c)
-                ))(list(enumerate(a)))
-            ))(q["answers"], q["correct"])[0]}
-            for q in group_questions
-        ]
+        new_group = []
+        for q in group_questions:
+            answers = q["answers"].copy()
+            correct = q["correct"]
+            paired = list(enumerate(answers))
+            random.shuffle(paired)
+            new_answers = [ans for _, ans in paired]
+            new_correct = next(i for i, (old, _) in enumerate(paired) if old == correct)
+            new_group.append({**q, "answers": new_answers, "correct": new_correct})
+        group_questions = new_group
 
-    test = {**test, "questions": group_questions}
-
-    end = start + (end - start)  # оставляем диапазон тем же
-    if not test:
-        return await callback.answer(t(callback.from_user.id, "test_not_found"), show_alert=True)
+    # Новый тест-объект с переиндексированными вопросами (всегда начинается с 0)
+    local_test = {**test, "questions": group_questions}
+    local_end = len(group_questions)  # например, 30 — всегда от 0 до N
 
     await state.update_data(
         chat_id=callback.message.chat.id,
         user_id=callback.from_user.id,
         test_id=test_id,
-        test=test,
-        q_index=start,
-        start=start,
-        end=end,
+        test=local_test,
+        q_index=0,          # всегда с нуля!
+        start=0,            # всегда с нуля!
+        end=local_end,      # длина группы
         score=0,
         wrong=0,
         start_time=time.time(),
@@ -2109,9 +2142,14 @@ async def poll_answer_handler(poll_answer: PollAnswer):
     state = get_fsm_context(owner_id)
     data = await state.get_data()
 
+    # Отменяем таймаут сразу
     task = data.get("timeout_task")
-    if task:
+    if task and not task.done():
         task.cancel()
+        try:
+            await asyncio.wait_for(asyncio.shield(task), timeout=0.1)
+        except (asyncio.CancelledError, asyncio.TimeoutError):
+            pass
 
     if data.get("current_poll_id") != poll_id:
         return
@@ -2132,11 +2170,12 @@ async def poll_answer_handler(poll_answer: PollAnswer):
         score=score,
         wrong=wrong,
         q_index=q_index + 1,
-        inactive_count=0
+        inactive_count=0,
+        timeout_task=None
     )
 
     poll_owners.pop(poll_id, None)
-    await asyncio.sleep(0.5)
+    # Убрали sleep(0.5) — отправляем сразу
     await send_question(state)
 
 # ====================== ОЧИСТКА ФАЙЛОВ ======================
@@ -2167,6 +2206,100 @@ async def set_commands():
         BotCommand(command="help", description="about this bot"),
     ]
     await bot.set_my_commands(commands)
+
+# ====================== РАССЫЛКА ======================
+
+@dp.message(BroadcastMessage.message)
+async def broadcast_get_message(message: Message, state: FSMContext):
+    user_id = message.from_user.id
+
+    if message.text == "❌ Отмена":
+        await state.clear()
+        await message.answer("❌ Рассылка отменена", reply_markup=get_menu(user_id))
+        return
+
+    # Сохраняем message_id и тип
+    await state.update_data(
+        broadcast_chat_id=message.chat.id,
+        broadcast_message_id=message.message_id
+    )
+
+    users = load_users()
+    count = len(users)
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text=f"✅ Отправить ({count} польз.)", callback_data="broadcast_confirm"),
+            InlineKeyboardButton(text="❌ Отмена", callback_data="broadcast_cancel")
+        ]
+    ])
+
+    await message.answer(
+        f"📢 Предпросмотр сообщения выше.\n\n"
+        f"👥 Получателей: {count}\n\n"
+        f"Подтвердите рассылку:",
+        reply_markup=kb
+    )
+    await state.set_state(BroadcastMessage.confirm)
+
+
+@dp.callback_query(F.data == "broadcast_confirm")
+async def broadcast_confirm(callback: CallbackQuery, state: FSMContext):
+    user_id = callback.from_user.id
+    if user_id != SUPER_ADMIN_ID:
+        return await callback.answer("Нет доступа", show_alert=True)
+
+    data = await state.get_data()
+    src_chat_id = data.get("broadcast_chat_id")
+    src_message_id = data.get("broadcast_message_id")
+
+    users = load_users()
+    await callback.message.edit_text(
+        f"📤 Рассылка началась...\n👥 Получателей: {len(users)}"
+    )
+    await state.clear()
+
+    success = 0
+    failed = 0
+
+    for uid in users:
+        try:
+            await bot.copy_message(
+                chat_id=int(uid),
+                from_chat_id=src_chat_id,
+                message_id=src_message_id
+            )
+            success += 1
+            await asyncio.sleep(0.05)  # защита от флуда Telegram
+        except Exception:
+            failed += 1
+
+    await bot.send_message(
+        user_id,
+        f"✅ Рассылка завершена!\n\n"
+        f"📨 Отправлено: {success}\n"
+        f"❌ Не доставлено: {failed}",
+        reply_markup=get_menu(user_id)
+    )
+
+    log_admin_action(
+        admin_id=user_id,
+        action="broadcast",
+        target_user="all_users",
+        details=f"Рассылка: доставлено {success}, ошибок {failed}"
+    )
+
+
+@dp.callback_query(F.data == "broadcast_cancel")
+async def broadcast_cancel(callback: CallbackQuery, state: FSMContext):
+    await state.clear()
+    await callback.message.edit_text("❌ Рассылка отменена")
+    await bot.send_message(
+        callback.from_user.id,
+        "Главное меню:",
+        reply_markup=get_menu(callback.from_user.id)
+    )
+    await callback.answer()
 
 # ====================== ЗАПУСК ======================
 

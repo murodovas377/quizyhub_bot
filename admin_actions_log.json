@@ -87,6 +87,22 @@
             "target_user": "5754507076",
             "details": "Выдал Premium на 1 мес. (30 дней) пользователю .",
             "timestamp": "2026-05-13T00:20:53.078364"
+        },
+        {
+            "admin_id": 7760002425,
+            "admin_name": "M | A",
+            "action": "broadcast",
+            "target_user": "all_users",
+            "details": "Рассылка: доставлено 4, ошибок 0",
+            "timestamp": "2026-05-13T12:57:52.826138"
+        },
+        {
+            "admin_id": 7760002425,
+            "admin_name": "M | A",
+            "action": "give_premium",
+            "target_user": "5949647500",
+            "details": "Выдал Premium на 1 мес. (30 дней) пользователю Firdavs",
+            "timestamp": "2026-05-13T16:35:33.180140"
         }
     ]
 }
