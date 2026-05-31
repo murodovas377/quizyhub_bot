@@ -397,7 +397,7 @@ async def start_handler(message: Message):
     user_lang = get_user_lang(message.from_user.id)
 
     # Кнопка для открытия Web App
-    web_app_url = "http://localhost:5173"
+    web_app_url = "https://quizyhub-bot.vercel.app"
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
