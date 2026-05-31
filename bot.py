@@ -19,7 +19,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
 from aiogram.fsm.storage.base import StorageKey
 from docx import Document
-from aiogram.types import WebAppInfo
+from aiogram.types import WebAppInfo, MenuButtonWebApp
 from config import BOT_TOKEN
 from datetime import datetime
 from database import (
@@ -396,14 +396,8 @@ async def start_handler(message: Message):
     save_user(message.from_user)
     user_lang = get_user_lang(message.from_user.id)
 
-    # Кнопка для открытия Web App
-    web_app_url = "https://quizyhub-bot.vercel.app"
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(
-            text=t(message.from_user.id, "open_app"),
-            web_app=WebAppInfo(url=web_app_url)
-        )],
         [InlineKeyboardButton(text="🇷🇺 Русский", callback_data="lang_ru")],
         [InlineKeyboardButton(text="🇬🇧 English", callback_data="lang_en")],
         [InlineKeyboardButton(text="🇺🇿 O'zbek", callback_data="lang_uz")]
@@ -1627,11 +1621,15 @@ async def clean_files():
 
 # ====================== КОМАНДЫ ======================
 
+web_app_url = "https://quizyhub-bot.vercel.app"
+
 async def set_commands():
-    await bot.set_my_commands([
-        BotCommand(command="start", description="🏠 Open Web App / Открыть App / Appni ochish"),
-        BotCommand(command="stop", description="⛔ Stop the active quiz"),
-    ])
+    await bot.set_chat_menu_button(
+        menu_button=MenuButtonWebApp(
+            text="Open",
+            web_app=WebAppInfo(url=web_app_url)
+        )
+    )
 
 
 # ====================== ЗАПУСК ======================

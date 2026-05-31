@@ -7,7 +7,7 @@ import CreateTest from './pages/CreateTest';
 import EditTest from './pages/EditTest';
 import TestResults from './pages/TestResults';
 
-const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:3000/api';
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000/api';
 
 function App() {
   const [user, setUser] = useState(null);

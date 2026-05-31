@@ -2,7 +2,7 @@
 
 import React, { useEffect, useState } from 'react';
 
-const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:3000/api';
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000/api';
 
 function Dashboard({ user, language, t, onCreateNew, onEdit, onViewResults }) {
   const [tests, setTests] = useState([]);
