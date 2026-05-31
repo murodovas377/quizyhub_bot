@@ -31,3 +31,12 @@ ENV/
 config.py.bak
 *.bak
 ls -a
+
+# Node
+node_modules/
+dist/
+.env.local
+
+# Webapp
+webapp/node_modules/
+webapp/dist/

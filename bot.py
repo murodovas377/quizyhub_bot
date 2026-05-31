@@ -19,6 +19,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
 from aiogram.fsm.storage.base import StorageKey
 from docx import Document
+from aiogram.types import WebAppInfo
 from config import BOT_TOKEN
 from datetime import datetime
 from database import (
@@ -393,12 +394,25 @@ class IsMenuButton(Filter):
 @dp.message(Command("start"))
 async def start_handler(message: Message):
     save_user(message.from_user)
+    user_lang = get_user_lang(message.from_user.id)
+
+    # Кнопка для открытия Web App
+    web_app_url = "http://localhost:5173"
+
     kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text=t(message.from_user.id, "open_app"),
+            web_app=WebAppInfo(url=web_app_url)
+        )],
         [InlineKeyboardButton(text="🇷🇺 Русский", callback_data="lang_ru")],
         [InlineKeyboardButton(text="🇬🇧 English", callback_data="lang_en")],
         [InlineKeyboardButton(text="🇺🇿 O'zbek", callback_data="lang_uz")]
     ])
-    await message.answer("🌐 Выберите язык / Choose language / Tilni tanlang:", reply_markup=kb)
+
+    await message.answer(
+        t(message.from_user.id, "welcome_webapp"),
+        reply_markup=kb
+    )
 
 @dp.message(Command("help"))
 async def help_handler(message: Message):
@@ -488,6 +502,24 @@ async def any_state_menu_handler(message: Message, state: FSMContext):
 async def main_text_handler(message: Message, state: FSMContext):
     text = message.text
     user_id = message.from_user.id
+
+    # ← ВСТАВЬ ЭТИ СТРОКИ:
+    state_data = await state.get_data()
+
+    # Если пользователь в процессе теста
+    if state_data.get("test_id"):
+        test_name = state_data.get("test", {}).get("name", "Тест")
+        q_index = state_data.get("q_index", 0)
+        total = state_data.get("end", 0)
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text=t(user_id, "continue_test"), callback_data="resume_test")],
+            [InlineKeyboardButton(text=t(user_id, "stop_tests"), callback_data="stop_test")]
+        ])
+        return await message.answer(
+            f"⚠️ {t(user_id, 'test_paused').format(name=test_name)}\n\n"
+            f"📊 Прогресс: {q_index + 1}/{total}",
+            reply_markup=kb
+        )
 
     if text == "📢 Рассылка" and user_id == SUPER_ADMIN_ID:
         await message.answer(
@@ -903,7 +935,9 @@ async def send_test_result(chat_id: int, data: dict, state: FSMContext):
         [InlineKeyboardButton(text=t(user_id, "btn_retry"),
                               callback_data=f"retry_test_{test_id}_{orig_start}_{orig_end}")],
         [InlineKeyboardButton(text=t(user_id, "btn_send_group"), callback_data=f"send_to_group_{test_id}")],
-        [InlineKeyboardButton(text=t(user_id, "btn_share"), callback_data=f"share_{test_id}_{orig_start}_{orig_end}")]
+        [InlineKeyboardButton(text=t(user_id, "btn_share"), callback_data=f"share_{test_id}_{orig_start}_{orig_end}")],
+        [InlineKeyboardButton(text=t(user_id, "btn_back"), callback_data=f"back_to_groups_{test_id}")]
+        # ← ДОБАВЬ ЭТУ СТРОКУ
     ])
     await bot.send_message(chat_id, text, reply_markup=kb)
     await state.clear()
@@ -1150,9 +1184,7 @@ async def give_premium_plus_callback(callback: CallbackQuery):
 @dp.callback_query(F.data.startswith("remove_"))
 async def remove_premium_callback(callback: CallbackQuery):
     uid = callback.data.split("_")[1]
-    data = load_premium_users()
-    data.pop(uid, None)
-    save_premium_users(data)
+    remove_premium(int(uid))
     users = load_users()
     target_name = users.get(uid, {}).get("name", f"ID{uid}")
     log_admin_action(callback.from_user.id, "remove_premium", uid, f"Удалил Premium — {target_name}")
@@ -1597,12 +1629,10 @@ async def clean_files():
 
 async def set_commands():
     await bot.set_my_commands([
-        BotCommand(command="start", description="🏠 Main menu / Главное меню / Asosiy menyu"),
-        BotCommand(command="newquiz", description="Create a new quiz"),
-        BotCommand(command="lang", description="Change language"),
-        BotCommand(command="stop", description="Stop the active quiz"),
-        BotCommand(command="help", description="About this bot"),
+        BotCommand(command="start", description="🏠 Open Web App / Открыть App / Appni ochish"),
+        BotCommand(command="stop", description="⛔ Stop the active quiz"),
     ])
+
 
 # ====================== ЗАПУСК ======================
 

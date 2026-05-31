@@ -1,0 +1,6 @@
+DATABASE_URL=postgresql://user:password@host:5432/database
+BOT_TOKEN=your_bot_token_here
+PORT=3000
+NODE_ENV=production
+FRONTEND_URL=https://your-frontend.vercel.app
+API_URL=https://your-api.railway.app
