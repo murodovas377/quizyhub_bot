@@ -1,133 +1,96 @@
-// App.jsx - Главный компонент React Web App для Telegram Mini App
-
 import React, { useEffect, useState } from 'react';
 import './App.css';
 import Dashboard from './pages/Dashboard';
-import CreateTest from './pages/CreateTest';
-import EditTest from './pages/EditTest';
-import TestResults from './pages/TestResults';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000/api';
 
 function App() {
   const [user, setUser] = useState(null);
-  const [language, setLanguage] = useState('ru');
-  const [currentPage, setCurrentPage] = useState('dashboard');
-  const [selectedTest, setSelectedTest] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
 
-  // Инициализация Telegram WebApp
   useEffect(() => {
-    const tg = window.Telegram?.WebApp;
-    if (tg) {
-      tg.ready();
-      tg.expand();
-      
-      // Получить язык
-      const lang = tg.initDataUnsafe?.user?.language_code || 'ru';
-      if (lang.startsWith('en')) {
-        setLanguage('en');
-      } else if (lang.startsWith('uz')) {
-        setLanguage('uz');
-      } else {
-        setLanguage('ru');
-      }
-
-      // Получить информацию о пользователе
-      fetchUser();
-    }
+    initTelegramWebApp();
   }, []);
 
-  // Загрузить информацию о пользователе
-  const fetchUser = async () => {
+  const initTelegramWebApp = async () => {
     try {
-      const initData = window.Telegram?.WebApp?.initData;
+      const tg = window.Telegram?.WebApp;
+      
+      if (!tg) {
+        setError('Telegram WebApp not available');
+        setLoading(false);
+        return;
+      }
+
+      // Инициализируем WebApp
+      tg.ready();
+      tg.expand();
+
+      // Получаем initData
+      const initData = tg.initData;
+      
+      if (!initData) {
+        setError('No init data from Telegram');
+        setLoading(false);
+        return;
+      }
+
+      // Отправляем на сервер для верификации
       const response = await fetch(`${API_URL}/user`, {
+        method: 'GET',
         headers: {
-          'x-telegram-init-data': initData
+          'x-telegram-init-data': initData,
+          'Content-Type': 'application/json'
         }
       });
 
       if (response.ok) {
         const userData = await response.json();
         setUser(userData);
-        setLanguage(userData.language || language);
+        setError(null);
+      } else {
+        const errorData = await response.json();
+        setError(errorData.error || 'Failed to fetch user');
       }
-    } catch (error) {
-      console.error('Error fetching user:', error);
+    } catch (err) {
+      console.error('Error:', err);
+      setError(err.message);
     } finally {
       setLoading(false);
     }
   };
 
-  const translations = {
-    ru: {
-      dashboard: 'Мои тесты',
-      createNew: 'Создать новый',
-      readyTests: 'Готовые тесты',
-      editTest: 'Редактировать',
-      deleteTest: 'Удалить',
-      viewResults: 'Результаты',
-      startTest: 'Начать тест',
-      backButton: 'Назад',
-      loading: 'Загрузка...',
-      noTests: 'У вас ещё нет тестов',
-      testName: 'Название теста',
-      testTime: 'Время на вопрос (сек)',
-      questions: 'Вопросы',
-      save: 'Сохранить',
-      cancel: 'Отмена',
-      premiumRequired: 'Нужен Premium',
-      logOut: 'Выход'
-    },
-    en: {
-      dashboard: 'My Tests',
-      createNew: 'Create New',
-      readyTests: 'Ready Tests',
-      editTest: 'Edit',
-      deleteTest: 'Delete',
-      viewResults: 'Results',
-      startTest: 'Start Test',
-      backButton: 'Back',
-      loading: 'Loading...',
-      noTests: 'You have no tests yet',
-      testName: 'Test Name',
-      testTime: 'Time per question (sec)',
-      questions: 'Questions',
-      save: 'Save',
-      cancel: 'Cancel',
-      premiumRequired: 'Premium Required',
-      logOut: 'Log Out'
-    },
-    uz: {
-      dashboard: 'Mening testlar',
-      createNew: 'Yangi yaratish',
-      readyTests: 'Tayyor testlar',
-      editTest: 'Tahrirlash',
-      deleteTest: 'Oʻchirish',
-      viewResults: 'Natijalar',
-      startTest: 'Testni boshlash',
-      backButton: 'Orqaga',
-      loading: 'Yuklanmoqda...',
-      noTests: 'Hali testlar yoq',
-      testName: 'Test nomi',
-      testTime: 'Savol uchun vaqt (sek)',
-      questions: 'Savollar',
-      save: 'Saqlash',
-      cancel: 'Bekor qilish',
-      premiumRequired: 'Premium kerak',
-      logOut: 'Chiqish'
-    }
-  };
-
-  const t = (key) => translations[language]?.[key] || translations['ru'][key];
-
   if (loading) {
     return (
       <div className="app">
-        <div className="loader">
+        <div style={{ textAlign: 'center', padding: '40px' }}>
           <div className="spinner"></div>
-          <p>{t('loading')}</p>
+          <p>Загрузка...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="app">
+        <div style={{ textAlign: 'center', padding: '40px', color: 'red' }}>
+          <h2>❌ Ошибка</h2>
+          <p>{error}</p>
+          <p style={{ fontSize: '12px', marginTop: '20px', color: '#999' }}>
+            Убедись что открываешь из Telegram бота!
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!user) {
+    return (
+      <div className="app">
+        <div style={{ textAlign: 'center', padding: '40px' }}>
+          <p>Нет данных пользователя</p>
         </div>
       </div>
     );
@@ -135,108 +98,7 @@ function App() {
 
   return (
     <div className="app">
-      {/* HEADER */}
-      <header className="header">
-        <div className="header-content">
-          <h1>📚 QuizHub</h1>
-          <div className="header-actions">
-            <button 
-              className="lang-btn"
-              onClick={() => setLanguage(language === 'ru' ? 'en' : language === 'en' ? 'uz' : 'ru')}
-            >
-              {language === 'ru' ? '🇷🇺' : language === 'en' ? '🇬🇧' : '🇺🇿'}
-            </button>
-            <button className="logout-btn" onClick={() => {
-              window.Telegram?.WebApp?.close();
-            }}>
-              {t('logOut')}
-            </button>
-          </div>
-        </div>
-      </header>
-
-      {/* ОСНОВНОЙ КОНТЕНТ */}
-      <main className="main-content">
-        {currentPage === 'dashboard' && (
-          <Dashboard 
-            user={user}
-            language={language}
-            translations={translations[language]}
-            t={t}
-            onCreateNew={() => setCurrentPage('create')}
-            onEdit={(test) => {
-              setSelectedTest(test);
-              setCurrentPage('edit');
-            }}
-            onViewResults={(test) => {
-              setSelectedTest(test);
-              setCurrentPage('results');
-            }}
-          />
-        )}
-
-        {currentPage === 'create' && (
-          <CreateTest 
-            user={user}
-            language={language}
-            t={t}
-            onBack={() => setCurrentPage('dashboard')}
-            onSuccess={() => setCurrentPage('dashboard')}
-          />
-        )}
-
-        {currentPage === 'edit' && (
-          <EditTest 
-            test={selectedTest}
-            user={user}
-            language={language}
-            t={t}
-            onBack={() => setCurrentPage('dashboard')}
-            onSuccess={() => setCurrentPage('dashboard')}
-          />
-        )}
-
-        {currentPage === 'results' && (
-          <TestResults 
-            test={selectedTest}
-            user={user}
-            language={language}
-            t={t}
-            onBack={() => setCurrentPage('dashboard')}
-          />
-        )}
-      </main>
-
-      {/* НАВИГАЦИЯ */}
-      <nav className="bottom-nav">
-        <button 
-          className={`nav-btn ${currentPage === 'dashboard' ? 'active' : ''}`}
-          onClick={() => setCurrentPage('dashboard')}
-        >
-          <span className="icon">📂</span>
-          <span className="label">{t('dashboard')}</span>
-        </button>
-        <button 
-          className={`nav-btn ${currentPage === 'create' ? 'active' : ''}`}
-          onClick={() => setCurrentPage('create')}
-        >
-          <span className="icon">✍️</span>
-          <span className="label">{t('createNew')}</span>
-        </button>
-        <button 
-          className="nav-btn"
-          onClick={() => {
-            if (!user?.is_premium_plus) {
-              alert(t('premiumRequired'));
-              return;
-            }
-            // Логика для готовых тестов
-          }}
-        >
-          <span className="icon">⭐</span>
-          <span className="label">{t('readyTests')}</span>
-        </button>
-      </nav>
+      <Dashboard user={user} language={user.language || 'ru'} />
     </div>
   );
 }
